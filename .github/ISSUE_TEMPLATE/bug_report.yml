@@ -1,0 +1,39 @@
+name: 助手也罢工了
+description: 报告更新失败、界面异常或恢复问题。请勿提交密码、令牌或未脱敏日志。
+title: '[Bug] '
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: '感谢来报修！先别给助手的助手立项，我们看看能不能修。日志和截图请先打码。'
+  - type: input
+    id: helper-version
+    attributes:
+      label: 助手版本
+      placeholder: 例如 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本与运行方式
+      placeholder: 例如 0.2.1-rc.2 / Desktop
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 操作系统与市场版本
+      placeholder: 例如 Windows 11 / dshmarket 1.66.44
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 怎么让它罢工
+      description: 操作步骤、预期结果与实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 操作详情或截图（请先脱敏）
+      description: 删除令牌、用户名、本机路径等敏感信息。不要上传整个 DSH 配置。

@@ -1,0 +1,27 @@
+# 依赖、包文件和缓存；别把整个仓库吃撑了。
+node_modules/
+*.tgz
+.npm-cache/
+.cache/
+coverage/
+*.log
+
+# 凭据不参与开源。
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+
+# 编辑器 / 系统杂物。
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 本地恢复和诊断记录不属于项目源码。
+*-recovery/
+acl-report-*.jsonl
+acl-backup-*

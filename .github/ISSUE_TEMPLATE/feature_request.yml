@@ -1,0 +1,21 @@
+name: 我有一个不太成熟的想法
+description: 提个建议。开发「更新助手更新助手」之前，请深呼吸。
+title: '[Feature] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到了什么问题
+      description: 先说场景，再说方案；也许不需要再加一个按钮。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望怎么解决
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 有哪些替代办法

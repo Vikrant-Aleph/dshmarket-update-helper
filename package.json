@@ -1,0 +1,28 @@
+{
+  "repository": {
+  "type": "git",
+  "url": "git+https://github.com/Vikrant-Aleph/dshmarket-update-helper.git"
+  },
+  "homepage": "https://github.com/Vikrant-Aleph/dshmarket-update-helper#readme",
+  "bugs": {
+    "url": "https://github.com/Vikrant-Aleph/dshmarket-update-helper/issues"
+  },
+  "name": "dshmarket-update-helper",
+  "version": "1.0.0",
+  "description": "一个插件，专治插件市场无法更新自己的尴尬 ＞﹏＜",
+  "keywords": ["dsh", "deepseek-harness", "dsh-plugin", "dshmarket", "updater"],
+  "publishConfig": {"access": "public", "registry": "https://registry.npmjs.org/"},
+  "type": "module",
+  "license": "MIT",
+  "exports": {".": "./index.js", "./client": "./client.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg"},
+  "files": ["index.js", "updater.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "test": "node test/updater.test.js",
+    "check": "node --check index.js && node --check updater.js && node --check client.js && node scripts/check-package.js",
+    "prepack": "npm run check && npm test"
+  },
+  "dsh": {
+    "bundle": {"patch": "./cordis.patch.yml"},
+    "client": {"platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-settings"]}
+  }
+}
