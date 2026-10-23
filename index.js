@@ -1,22 +1,42 @@
 import {createUpdater} from './updater.js';
 export const inject = ['pluginManager', 'connection', 'tools', 'approval'];
-export function apply(ctx) {
-  const updater = createUpdater(ctx.pluginManager);
-  ctx.effect(() => ctx.provide('marketUpdateHelper', updater));
-  ctx.effect(() => () => updater.dispose());
-  ctx.effect(() => ctx.connection.fetch.register({
+
+// This route is mounted behind Connection's authenticated owner-only Fetch registry.
+// request.url is reconstructed as http://dsh.internal/... by the HTTP bridge;
+// it is a routing URL, NOT the browser's origin. Never use it for Origin checks.
+export function createUpdateRoute(updater) {
+  return {
     path: '/api/market-update-helper', methods: ['GET', 'POST'], requestBody: 'buffered',
     async fetch(request) {
-      // Connection authenticates this exact Fetch route; mutation also requires same-origin.
       if (request.method === 'POST') {
-        if (request.headers.get('origin') !== new URL(request.url).origin || request.headers.get('x-market-update-helper') !== '1') {
-          return Response.json({error: 'Same-origin UI request required.'}, {status: 403});
+        let trusted = request.headers.get('x-market-update-helper') === '1'
+          && request.headers.get('sec-fetch-site') !== 'cross-site';
+        const origin = request.headers.get('origin');
+        if (origin !== null) {
+          try {
+            const parsed = new URL(origin);
+            const host = request.headers.get('host');
+            // Normalize Host under Origin's scheme, including default ports.
+            // Do not trust X-Forwarded-Host or the bridge's internal URL.
+            trusted = trusted && !!host && ['http:', 'https:'].includes(parsed.protocol)
+              && parsed.origin === origin
+              && new URL(`${parsed.protocol}//${host}`).origin === parsed.origin;
+          } catch { trusted = false; }
         }
+        // Some same-origin desktop transports omit Origin. Connection admission
+        // plus the non-simple custom header still protect those requests.
+        if (!trusted) return Response.json({code: 'UI_REQUEST_REJECTED', error: 'Update request verification failed. Refresh the page and retry.'}, {status: 403, headers: {'Cache-Control': 'no-store'}});
         void updater.update().catch(() => {});
       }
       return Response.json(await updater.status(), {headers: {'Cache-Control': 'no-store'}});
     },
-  }));
+  };
+}
+export function apply(ctx) {
+  const updater = createUpdater(ctx.pluginManager);
+  ctx.effect(() => ctx.provide('marketUpdateHelper', updater));
+  ctx.effect(() => () => updater.dispose());
+  ctx.effect(() => ctx.connection.fetch.register(createUpdateRoute(updater)));
   ctx.effect(() => ctx.tools.register({
     name: 'dshmarket_update',
     description: 'Check the independent market updater, or update npm-stable dshmarket profile-wide. Update removes the old market before installation, attempts recovery on install failure, and may require restart. Requests approval before mutation; does not authorize build scripts.',

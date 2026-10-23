@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createUpdater, compareVersions, HELPER_VERSION} from '../updater.js';
-import {apply} from '../index.js';
+import {apply, createUpdateRoute} from '../index.js';
 function fixture(options = {}) {
   let bundle = {name: 'dshmarket', installed: true, removable: true, availability: 'profile', enabled: true, version: '1.0.0', source: 'dshmarket@1.0.0', ...options.bundle};
   const calls = [];
@@ -72,7 +72,43 @@ test('local source is never replaced by npm', async () => {
   const f = fixture({bundle: {source: 'link:D:\\source'}}); const u = createUpdater(f.manager, async () => '2.0.0');
   assert.equal((await u.update()).phase, 'failed'); assert.equal(f.calls.length, 0);
 });
-test('Host route requires same-origin marker; tool fails closed on approval rejection', async () => {
+// Route-level tests assume Connection has already authenticated the owner.
+// Both Web and Desktop carriers are responsible for that admission boundary.
+const routeCases = [
+  ['bridge internal URL differs from browser Origin', {origin: 'http://127.0.0.1:56845', host: '127.0.0.1:56845'}, 200],
+  ['localhost real host is supported', {origin: 'http://localhost:56845', host: 'localhost:56845'}, 200],
+  ['HTTPS proxy Host uses Origin scheme', {origin: 'https://dsh.example', host: 'dsh.example:443'}, 200],
+  ['authenticated desktop transport may omit Origin', {host: '127.0.0.1:56845'}, 200],
+  ['cross-origin request rejected', {origin: 'https://evil.example', host: '127.0.0.1:56845'}, 403],
+  ['wrong port rejected', {origin: 'http://127.0.0.1:1', host: '127.0.0.1:56845'}, 403],
+  ['null Origin rejected', {origin: 'null', host: '127.0.0.1:56845'}, 403],
+  ['Origin without Host rejected', {origin: 'http://127.0.0.1:56845'}, 403],
+  ['cross-site Fetch Metadata rejected', {host: '127.0.0.1:56845', 'sec-fetch-site': 'cross-site'}, 403],
+  ['forwarded host cannot bypass rejection', {origin: 'https://evil.example', host: '127.0.0.1:56845', 'x-forwarded-host': 'evil.example'}, 403],
+];
+for (const [label, headers, expected] of routeCases) test(`UI request: ${label}`, async () => {
+  let updates = 0;
+  const updater = {async status() {return {phase: 'idle', busy: false};}, async update() {updates++;}};
+  const route = createUpdateRoute(updater);
+  const request = new Request('http://dsh.internal/api/market-update-helper', {method: 'POST', headers: {'x-market-update-helper': '1', ...headers}});
+  const result = await route.fetch(request);
+  assert.equal(result.status, expected);
+  assert.equal(updates, expected === 200 ? 1 : 0);
+  assert.equal(result.headers.get('cache-control'), 'no-store');
+});
+test('UI request marker is mandatory even with a valid Origin', async () => {
+  let updates = 0;
+  const route = createUpdateRoute({async status() {return {};}, async update() {updates++;}});
+  const result = await route.fetch(new Request('http://dsh.internal/api/market-update-helper', {method: 'POST', headers: {origin: 'http://localhost:56845', host: 'localhost:56845'}}));
+  assert.equal(result.status, 403); assert.equal(updates, 0);
+});
+test('reading status never starts an update', async () => {
+  let updates = 0;
+  const route = createUpdateRoute({async status() {return {phase: 'idle'};}, async update() {updates++;}});
+  const result = await route.fetch(new Request('http://dsh.internal/api/market-update-helper'));
+  assert.equal(result.status, 200); assert.equal(updates, 0);
+});
+test('Host route requires UI marker; tool fails closed on approval rejection', async () => {
   const f = fixture(); let route, tool; const cleanup = [];
   const ctx = {pluginManager: f.manager, provide: () => () => {}, effect: fn => {const d = fn(); if (d) cleanup.push(d);}, connection: {fetch: {register: r => {route = r; return () => {};}}}, tools: {register: t => {tool = t; return () => {};}}, approval: {request: async () => 'rejected'}};
   apply(ctx);
