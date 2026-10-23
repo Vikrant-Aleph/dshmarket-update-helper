@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const dictionaries = {
       zh: {
-        title: '市场更新助手', update: '更新插件市场', working: '正在更新…', refresh: '刷新状态',
+        title: '插件市场更新助手', update: '更新插件市场', working: '正在更新…', refresh: '刷新状态',
         subtitle: '独立更新 dshmarket，不再让市场更新到一半把自己卸载掉。',
         version: '当前安装版本', missing: '未安装', target: '目标稳定版本',
         notice: '点击即检查并更新到 npm 最新稳定版。更新时市场会短暂消失；助手保留。影响当前配置的所有会话，不自动重启。',
