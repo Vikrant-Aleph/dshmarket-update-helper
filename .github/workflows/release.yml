@@ -1,0 +1,79 @@
+name: 打个标签，助手自动发版
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 检查标签和插件
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 标签必须与包版本一致
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          const tag = process.env.RELEASE_TAG;
+          const {version} = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (!/^v\d+\.\d+\.\d+$/.test(tag) || tag !== `v${version}`) {
+            throw new Error(`标签 ${tag} 必须为稳定版本号，且与 package.json 中的 v${version} 一致。`);
+          }
+          console.log(`准备发布 ${tag}`);
+          NODE
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --dry-run --ignore-scripts
+
+  release:
+    name: 自动创建 GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 发布 Release（不发布 npm）
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const tag = process.env.RELEASE_TAG;
+            const {owner, repo} = context.repo;
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({owner, repo, tag});
+              core.notice(`${tag} 已有 Release，保留原内容：${existing.data.html_url}`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            // 优先采用本版更新日志；没有对应段落时由 GitHub 生成说明。
+            const lines = fs.readFileSync('CHANGELOG.md', 'utf8').split(/\r?\n/);
+            const heading = `## [${tag.slice(1)}]`;
+            const start = lines.findIndex(line => line === heading || line.startsWith(`${heading} `));
+            let body;
+            if (start !== -1) {
+              const next = lines.findIndex((line, index) => index > start && /^##\s/.test(line));
+              body = lines.slice(start + 1, next === -1 ? undefined : next).join('\n').trim() || undefined;
+            }
+            const result = await github.rest.repos.createRelease({
+              owner, repo, tag_name: tag, name: tag,
+              draft: false, prerelease: false,
+              ...(body ? {body} : {generate_release_notes: true}),
+            });
+            core.notice(`助手已发布 ${tag}：${result.data.html_url}`);
