@@ -22,11 +22,42 @@ export async function latestRelease() {
 export function createUpdater(manager, resolveLatest = latestRelease) {
   let state = {phase: 'idle', busy: false};
   let active;
+  let checkActive;
+  let checkState = {phase: 'idle', latestVersion: null, checkedAt: null, error: null};
   let disposed = false;
   const set = patch => { state = {...state, ...patch, updatedAt: new Date().toISOString()}; };
   async function status() {
     const bundle = (await manager.listBundles()).find(b => b.name === NAME);
-    return {...state, helperVersion: HELPER_VERSION, installedVersion: bundle?.version || null, installed: !!bundle?.installed};
+    let comparison = null;
+    if (checkState.phase === 'succeeded') {
+      if (!bundle?.installed) comparison = 'not-installed';
+      else {
+        try {
+          const difference = compareVersions(checkState.latestVersion, bundle.version);
+          comparison = difference > 0 ? 'available' : difference < 0 ? 'ahead' : 'current';
+        } catch { comparison = 'unsupported'; }
+      }
+    }
+    return {...state, helperVersion: HELPER_VERSION, installedVersion: bundle?.version || null, installed: !!bundle?.installed,
+      check: {...checkState}, comparison, updateAvailable: comparison === null || comparison === 'unsupported' || comparison === 'not-installed' ? null : comparison === 'available'};
+  }
+  // Version discovery never installs anything or overwrites the update outcome.
+  // Concurrent checks (including the update's preflight) share one registry request.
+  function probe() {
+    if (checkActive) return checkActive;
+    checkState = {phase: 'checking', latestVersion: null, checkedAt: null, error: null};
+    checkActive = (async () => {
+      try {
+        const latestVersion = await resolveLatest();
+        compareVersions(latestVersion, latestVersion);
+        checkState = {phase: 'succeeded', latestVersion, checkedAt: new Date().toISOString(), error: null};
+        return latestVersion;
+      } catch (error) {
+        checkState = {phase: 'failed', latestVersion: null, checkedAt: new Date().toISOString(), error: String(error.message || error)};
+        throw error;
+      }
+    })().finally(() => { checkActive = undefined; });
+    return checkActive;
   }
   async function perform() {
     let old, removed = false;
@@ -37,7 +68,7 @@ export function createUpdater(manager, resolveLatest = latestRelease) {
       // Do not silently replace a local checkout, Git build or prerelease with npm stable.
       if (old && !/^dshmarket@(?:[~^]?\d|latest)/.test(old.source || '')) throw new Error('Only an npm-installed stable dshmarket is supported.');
       set({phase: 'checking'});
-      const targetVersion = await resolveLatest();
+      const targetVersion = await probe();
       set({targetVersion, beforeVersion: old?.version || null});
       if (old && compareVersions(targetVersion, old.version) <= 0) {
         set({phase: 'current'}); return;
@@ -75,6 +106,12 @@ export function createUpdater(manager, resolveLatest = latestRelease) {
   }
   return {
     status,
+    check() {
+      if (disposed) return Promise.reject(new Error('Updater is disposed.'));
+      // An ongoing update owns its preflight and version transition. Do not race it.
+      if (active) return active;
+      return probe().catch(() => {}).then(status);
+    },
     update() {
       if (disposed) return Promise.reject(new Error('Updater is disposed.'));
       if (active) return active;
@@ -82,6 +119,6 @@ export function createUpdater(manager, resolveLatest = latestRelease) {
       active = perform().then(status).finally(() => { active = undefined; });
       return active;
     },
-    async dispose() { disposed = true; if (active) await active; },
+    async dispose() { disposed = true; await Promise.allSettled([active, checkActive].filter(Boolean)); },
   };
 }

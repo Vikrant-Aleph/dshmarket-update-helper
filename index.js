@@ -8,6 +8,12 @@ export function createUpdateRoute(updater) {
   return {
     path: '/api/market-update-helper', methods: ['GET', 'POST'], requestBody: 'buffered',
     async fetch(request) {
+      if (request.method === 'GET') {
+        const action = new URL(request.url).searchParams.get('action') || 'status';
+        if (!['status', 'check'].includes(action)) return Response.json({error: 'Unknown action.'}, {status: 400});
+        const result = action === 'check' ? await updater.check() : await updater.status();
+        return Response.json(result, {headers: {'Cache-Control': 'no-store'}});
+      }
       if (request.method === 'POST') {
         let trusted = request.headers.get('x-market-update-helper') === '1'
           && request.headers.get('sec-fetch-site') !== 'cross-site';
@@ -39,12 +45,13 @@ export function apply(ctx) {
   ctx.effect(() => ctx.connection.fetch.register(createUpdateRoute(updater)));
   ctx.effect(() => ctx.tools.register({
     name: 'dshmarket_update',
-    description: 'Check the independent market updater, or update npm-stable dshmarket profile-wide. Update removes the old market before installation, attempts recovery on install failure, and may require restart. Requests approval before mutation; does not authorize build scripts.',
-    parameters: {type: 'object', properties: {action: {type: 'string', enum: ['status', 'update'], description: 'status reads current progress; update checks npm stable and installs a newer release.'}}, required: ['action'], additionalProperties: false},
+    description: 'Read updater status, check npm stable without installing, or update dshmarket profile-wide. Update removes the old market before installation, attempts recovery on install failure, and may require restart. Requests approval before mutation; does not authorize build scripts.',
+    parameters: {type: 'object', properties: {action: {type: 'string', enum: ['status', 'check', 'update'], description: 'status reads cached progress; check queries npm without installing; update installs a newer stable release.'}}, required: ['action'], additionalProperties: false},
     output: {schema: {type: 'object'}, render: (_args, value) => [{type: 'text', text: JSON.stringify(value)}]},
     async execute(args, exec) {
-      if (!args || !['status', 'update'].includes(args.action)) throw new Error('Invalid action.');
+      if (!args || !['status', 'check', 'update'].includes(args.action)) throw new Error('Invalid action.');
       if (args.action === 'status') return updater.status();
+      if (args.action === 'check') return updater.check();
       if (!exec.agent) throw new Error('A requesting agent is required.');
       const outcome = await ctx.approval.request({agent: exec.agent, callId: exec.callId, toolName: 'dshmarket_update', signal: exec.signal,
         reason: '更新当前配置中的 dshmarket 插件：先卸载旧版，再安装 npm 稳定新版；失败时尝试恢复旧版。影响此配置的所有会话，不自动重启或批准安装脚本。'});

@@ -72,6 +72,72 @@ test('local source is never replaced by npm', async () => {
   const f = fixture({bundle: {source: 'link:D:\\source'}}); const u = createUpdater(f.manager, async () => '2.0.0');
   assert.equal((await u.update()).phase, 'failed'); assert.equal(f.calls.length, 0);
 });
+test('check discovers a new release without changing installed packages', async () => {
+  const f = fixture(); const u = createUpdater(f.manager, async () => '2.0.0');
+  const result = await u.check();
+  assert.equal(result.phase, 'idle'); assert.equal(result.busy, false);
+  assert.equal(result.check.phase, 'succeeded'); assert.equal(result.check.latestVersion, '2.0.0');
+  assert.equal(result.comparison, 'available'); assert.equal(result.updateAvailable, true);
+  assert.ok(result.check.checkedAt); assert.deepEqual(f.calls, []);
+});
+for (const [installed, comparison] of [['2.0.0', 'current'], ['3.0.0', 'ahead'], ['2.0.0-beta.1', 'unsupported']]) {
+  test(`check comparison: ${comparison}`, async () => {
+    const f = fixture({bundle: {version: installed}}); const u = createUpdater(f.manager, async () => '2.0.0');
+    const result = await u.check(); assert.equal(result.comparison, comparison);
+    assert.equal(result.updateAvailable, comparison === 'unsupported' ? null : false); assert.deepEqual(f.calls, []);
+  });
+}
+test('check failure invalidates an earlier successful result instead of reporting current', async () => {
+  const f = fixture(); let fail = false;
+  const u = createUpdater(f.manager, async () => {if (fail) throw new Error('offline'); return '1.0.0';});
+  assert.equal((await u.check()).comparison, 'current'); fail = true;
+  const result = await u.check(); assert.equal(result.check.phase, 'failed');
+  assert.equal(result.check.latestVersion, null); assert.equal(result.updateAvailable, null);
+  assert.equal(result.comparison, null); assert.match(result.check.error, /offline/); assert.deepEqual(f.calls, []);
+});
+test('invalid registry version is reported as a failed check', async () => {
+  const f = fixture(); const u = createUpdater(f.manager, async () => 'not-a-version');
+  assert.equal((await u.check()).check.phase, 'failed'); assert.deepEqual(f.calls, []);
+});
+test('concurrent checks share one npm query; status alone never queries npm', async () => {
+  const f = fixture(); let release; let lookups = 0;
+  const u = createUpdater(f.manager, () => {lookups++; return new Promise(resolve => {release = resolve;});});
+  await u.status(); assert.equal(lookups, 0);
+  const first = u.check(), second = u.check();
+  const during = await u.status(); assert.equal(during.check.phase, 'checking'); assert.equal(during.updateAvailable, null);
+  release('2.0.0'); await Promise.all([first, second]); assert.equal(lookups, 1); assert.deepEqual(f.calls, []);
+});
+test('an update shares an in-flight check and recomputes availability after installation', async () => {
+  const f = fixture(); let release; let lookups = 0;
+  const u = createUpdater(f.manager, () => {lookups++; return new Promise(resolve => {release = resolve;});});
+  const check = u.check(), update = u.update();
+  await Promise.resolve(); release('2.0.0');
+  await Promise.all([check, update]);
+  const result = await u.status(); assert.equal(lookups, 1); assert.equal(result.phase, 'succeeded');
+  assert.equal(result.comparison, 'current'); assert.equal(result.updateAvailable, false);
+});
+test('checking does not erase a prior update failure', async () => {
+  const f = fixture({removeFail: true}); const u = createUpdater(f.manager, async () => '2.0.0');
+  await u.update(); const result = await u.check();
+  assert.equal(result.phase, 'failed'); assert.match(result.error, /Remove/); assert.equal(result.updateAvailable, true);
+});
+test('uninstalled market is not reported as already current', async () => {
+  const f = fixture(); await f.manager.removeBundle('dshmarket'); f.calls.length = 0;
+  const u = createUpdater(f.manager, async () => '2.0.0'); const result = await u.check();
+  assert.equal(result.comparison, 'not-installed'); assert.equal(result.updateAvailable, null); assert.deepEqual(f.calls, []);
+});
+test('check after disposal does not issue requests', async () => {
+  const f = fixture(); let lookups = 0; const u = createUpdater(f.manager, async () => {lookups++; return '2.0.0';});
+  await u.dispose(); await assert.rejects(u.check(), /disposed/); assert.equal(lookups, 0);
+});
+test('GET check invokes only discovery; unknown GET action cannot start installation', async () => {
+  let checks = 0, updates = 0;
+  const route = createUpdateRoute({async status() {return {};}, async check() {checks++; return {updateAvailable: true};}, async update() {updates++;}});
+  const result = await route.fetch(new Request('http://dsh.internal/api/market-update-helper?action=check'));
+  assert.equal(result.status, 200); assert.equal((await result.json()).updateAvailable, true);
+  const bad = await route.fetch(new Request('http://dsh.internal/api/market-update-helper?action=update'));
+  assert.equal(bad.status, 400); assert.equal(checks, 1); assert.equal(updates, 0);
+});
 // Route-level tests assume Connection has already authenticated the owner.
 // Both Web and Desktop carriers are responsible for that admission boundary.
 const routeCases = [
@@ -107,6 +173,16 @@ test('reading status never starts an update', async () => {
   const route = createUpdateRoute({async status() {return {phase: 'idle'};}, async update() {updates++;}});
   const result = await route.fetch(new Request('http://dsh.internal/api/market-update-helper'));
   assert.equal(result.status, 200); assert.equal(updates, 0);
+});
+test('agent check action only discovers versions and does not request mutation approval', async t => {
+  const f = fixture(); let tool, approvals = 0; const cleanup = [];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({name: 'dshmarket', version: '2.0.0'}));
+  const ctx = {pluginManager: f.manager, provide: () => () => {}, effect: fn => {const d = fn(); if (d) cleanup.push(d);}, connection: {fetch: {register: () => () => {}}}, tools: {register: definition => {tool = definition; return () => {};}}, approval: {request: async () => {approvals++; return 'rejected';}}};
+  apply(ctx);
+  try {
+    const result = await tool.execute({action: 'check'}, {});
+    assert.equal(result.updateAvailable, true); assert.equal(approvals, 0); assert.deepEqual(f.calls, []);
+  } finally {for (const dispose of cleanup.reverse()) await dispose();}
 });
 test('Host route requires UI marker; tool fails closed on approval rejection', async () => {
   const f = fixture(); let route, tool; const cleanup = [];
